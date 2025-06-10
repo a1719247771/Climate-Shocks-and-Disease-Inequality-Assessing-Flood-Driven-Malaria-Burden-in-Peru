@@ -1,0 +1,22 @@
+Malaria Incidence Time Series Analysis Report
+=============================================
+
+Data Overview:
+- Analysis period: 2000 - 2023
+- Total cases: 1,175,932
+- Average annual cases: 48,997
+- Number of cities analyzed: 787
+
+Key Findings:
+- Peak year: 2005 (87,670 cases)
+- Peak month: 6 (Jun)
+
+Trend Characteristics:
+- Recent trend: Decreasing (-16.5%)
+Generated Files:
+1. Annual malaria cases trend analysis
+2. Monthly malaria cases trend analysis
+3. Summary statistics tables
+
+Files saved to: C:/Users/a1230/Desktop/malaria_timeseries_plots
+
