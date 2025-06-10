@@ -1,0 +1,448 @@
+#####################################
+## 10. Future Flood Risk Scenario Analysis - SSP Population Data Processing
+#####################################
+cat("\n--- 10. Future Flood Risk Scenario Analysis ---\n")
+
+# Load raster data processing packages
+packages_to_load_raster <- c("raster", "terra", "exactextractr")
+for(pkg in packages_to_load_raster){
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg, dependencies = TRUE)
+    cat("Package '", pkg, "' has been installed.\n", sep="")
+  }
+  library(pkg, character.only = TRUE)
+  cat("Package '", pkg, "' has been loaded.\n", sep="")
+}
+
+# Create output directory
+future_output_dir <- "C:/Users/a1230/Desktop/future"
+dir.create(future_output_dir, showWarnings = FALSE, recursive = TRUE)
+
+#####################################
+## 10.1 Define SSP data paths and read maps
+#####################################
+cat("\n--- 10.1 Read SSP data and maps ---\n")
+
+# SSP data paths
+ssp_paths <- list(
+  SSP1_2030 = "F:/ssp/SPP1/SPP1/SSP1_2030.tif",
+  SSP1_2050 = "F:/ssp/SPP1/SPP1/SSP1_2050.tif",
+  SSP2_2030 = "F:/ssp/SSP2/SPP2/SSP2_2030.tif",
+  SSP2_2050 = "F:/ssp/SSP2/SPP2/SSP2_2050.tif",
+  SSP3_2030 = "F:/ssp/SSP3/SPP3/SSP3_2030.tif",
+  SSP3_2050 = "F:/ssp/SSP3/SPP3/SSP3_2050.tif"
+)
+
+# Peru administrative division map path
+peru_shp_path <- "D:/Peru/Peru/third_level_administrative_map/per_admbnda_adm3_ign_20200714.shp"
+
+# Check if files exist
+missing_files <- c()
+for(name in names(ssp_paths)) {
+  if (!file.exists(ssp_paths[[name]])) {
+    missing_files <- c(missing_files, paste(name, ":", ssp_paths[[name]]))
+  }
+}
+if (!file.exists(peru_shp_path)) {
+  missing_files <- c(missing_files, paste("Peru map:", peru_shp_path))
+}
+
+if (length(missing_files) > 0) {
+  cat("Warning: The following files do not exist:\n")
+  cat(paste(missing_files, collapse = "\n"))
+  cat("\nPlease check file paths. Will use simulated data for demonstration.\n")
+  use_simulated_data <- TRUE
+} else {
+  use_simulated_data <- FALSE
+}
+
+#####################################
+## 10.2 Extract SSP population data for each administrative region
+#####################################
+cat("\n--- 10.2 Extract SSP population data for each administrative region ---\n")
+
+if (!use_simulated_data) {
+  # Read map data
+  tryCatch({
+    cat("Reading Peru map data...\n")
+    peru_map <- st_read(peru_shp_path, quiet = TRUE)
+    cat("Original map data rows:", nrow(peru_map), "\n")
+    
+    # Check map data column names
+    cat("Map data column names:", paste(names(peru_map), collapse = ", "), "\n")
+    
+    # Clean map data
+    peru_map <- peru_map[!st_is_empty(peru_map), ]
+    if(any(!st_is_valid(peru_map))) {
+      cat("Fixing invalid geometries...\n")
+      peru_map <- st_make_valid(peru_map)
+    }
+    
+    # Ensure projection is WGS84
+    peru_map <- st_transform(peru_map, crs = 4326)
+    cat("Map projection set to WGS84\n")
+    
+    # Extract population data for each scenario
+    ssp_population_data <- data.table()
+    
+    for(scenario_name in names(ssp_paths)) {
+      cat(paste("\n=== Processing", scenario_name, "===\n"))
+      
+      tryCatch({
+        # Check if file exists
+        if (!file.exists(ssp_paths[[scenario_name]])) {
+          cat("File does not exist:", ssp_paths[[scenario_name]], "\n")
+          next
+        }
+        
+        # Read raster data
+        cat("Reading raster file:", ssp_paths[[scenario_name]], "\n")
+        pop_raster <- rast(ssp_paths[[scenario_name]])
+        
+        # Check raster information
+        cat("Raster dimensions:", dim(pop_raster), "\n")
+        cat("Raster projection:", as.character(crs(pop_raster)), "\n")
+        cat("Raster value range:", paste(range(values(pop_raster), na.rm = TRUE), collapse = " - "), "\n")
+        
+        # Handle projection
+        if(is.na(crs(pop_raster)) || crs(pop_raster) == "") {
+          cat("Raster lacks projection information, assuming WGS84\n")
+          crs(pop_raster) <- "EPSG:4326"
+          peru_map_proj <- peru_map
+        } else {
+          # Transform map projection to match raster coordinate system
+          cat("Converting map projection to match raster...\n")
+          peru_map_proj <- st_transform(peru_map, crs = crs(pop_raster))
+        }
+        
+        # Check if map and raster extents overlap
+        map_bbox <- st_bbox(peru_map_proj)
+        raster_bbox <- as.vector(ext(pop_raster))
+        cat("Map extent:", paste(map_bbox, collapse = ", "), "\n")
+        cat("Raster extent:", paste(raster_bbox, collapse = ", "), "\n")
+        
+        # Extract total population by administrative region
+        cat("Starting population data extraction...\n")
+        pop_extract <- exact_extract(pop_raster, peru_map_proj, fun = "sum", progress = TRUE)
+        
+        cat("Extraction completed, non-NA values:", sum(!is.na(pop_extract)), "/", length(pop_extract), "\n")
+        cat("Population value range:", paste(range(pop_extract, na.rm = TRUE), collapse = " - "), "\n")
+        
+        # Handle negative values or outliers
+        pop_extract[is.na(pop_extract)] <- 0
+        pop_extract[pop_extract < 0] <- 0
+        
+        # Create result data frame
+        scenario_data <- data.table(
+          ADM3_PCODE = as.character(peru_map_proj$ADM3_PCODE),
+          ADM3_NAME = as.character(peru_map_proj$ADM3_EN),
+          scenario = scenario_name,
+          year = as.numeric(substr(scenario_name, nchar(scenario_name)-3, nchar(scenario_name))),
+          ssp_type = substr(scenario_name, 1, 4),
+          population_future = as.numeric(pop_extract)
+        )
+        
+        cat("Scenario data rows:", nrow(scenario_data), "\n")
+        cat("Non-zero population regions:", sum(scenario_data$population_future > 0), "\n")
+        
+        ssp_population_data <- rbind(ssp_population_data, scenario_data)
+        
+      }, error = function(e) {
+        cat(paste("Error processing", scenario_name, ":", e$message, "\n"))
+        cat("Error details:\n")
+        print(e)
+      })
+    }
+    
+    # Check final results
+    if(nrow(ssp_population_data) > 0) {
+      cat("\n=== SSP Data Extraction Summary ===\n")
+      cat("Total rows:", nrow(ssp_population_data), "\n")
+      cat("Non-zero population rows:", sum(ssp_population_data$population_future > 0), "\n")
+      cat("Non-zero population regions by scenario:\n")
+      print(ssp_population_data[, .(non_zero_regions = sum(population_future > 0)), by = scenario])
+    } else {
+      cat("Warning: No SSP population data was successfully extracted\n")
+      use_simulated_data <- TRUE
+    }
+    
+  }, error = function(e) {
+    cat("Error reading map or raster data:", e$message, "\n")
+    print(e)
+    cat("Will use simulated data.\n")
+    use_simulated_data <- TRUE
+  })
+}
+
+# If unable to read real data, use simulated data
+if (use_simulated_data || nrow(ssp_population_data) == 0 || sum(ssp_population_data$population_future > 0) == 0) {
+  cat("\n=== Using simulated SSP population data for demonstration ===\n")
+  
+  # Get existing city list
+  if(exists("city_sd_effect_specific") && nrow(city_sd_effect_specific) > 0) {
+    city_list <- unique(city_sd_effect_specific$ADM3)
+  } else {
+    # If no city list exists, create some example cities
+    city_list <- paste0("PE", sprintf("%06d", 1:100))
+  }
+  
+  cat("Using", length(city_list), "cities for simulation\n")
+  
+  # Create simulated SSP population data
+  scenarios <- c("SSP1_2030", "SSP1_2050", "SSP2_2030", "SSP2_2050", "SSP3_2030", "SSP3_2050")
+  
+  ssp_population_data <- data.table()
+  for(scenario in scenarios) {
+    year <- as.numeric(substr(scenario, nchar(scenario)-3, nchar(scenario)))
+    ssp_type <- substr(scenario, 1, 4)
+    
+    # Simulate population growth (based on growth rates for different SSP scenarios)
+    growth_rates <- list(
+      SSP1 = c("2030" = 1.15, "2050" = 1.25),  # Sustainable development pathway, lower growth
+      SSP2 = c("2030" = 1.25, "2050" = 1.45),  # Middle development pathway
+      SSP3 = c("2030" = 1.35, "2050" = 1.65)   # Regional competition pathway, higher growth
+    )
+    
+    growth_rate <- growth_rates[[ssp_type]][[as.character(year)]]
+    
+    # Generate base population for each city (between 5000-800000)
+    base_population <- runif(length(city_list), 5000, 800000)
+    
+    scenario_data <- data.table(
+      ADM3_PCODE = city_list,
+      ADM3_NAME = paste("Simulated City", 1:length(city_list)),
+      scenario = scenario,
+      year = year,
+      ssp_type = ssp_type,
+      population_future = round(base_population * growth_rate)
+    )
+    
+    ssp_population_data <- rbind(ssp_population_data, scenario_data)
+  }
+  
+  cat("Simulated data generation completed:\n")
+  cat("- Total rows:", nrow(ssp_population_data), "\n")
+  cat("- Number of cities:", length(unique(ssp_population_data$ADM3_PCODE)), "\n")
+  cat("- Number of scenarios:", length(unique(ssp_population_data$scenario)), "\n")
+  
+  # Display simulated data sample
+  cat("\nSimulated data sample:\n")
+  print(head(ssp_population_data))
+  
+  cat("\nPopulation statistics by scenario:\n")
+  print(ssp_population_data[, .(
+    avg_population = round(mean(population_future)),
+    total_population = sum(population_future),
+    min_population = min(population_future),
+    max_population = max(population_future)
+  ), by = scenario])
+}
+
+# Save SSP population data
+write_xlsx(ssp_population_data, file.path(future_output_dir, "ssp_population_data.xlsx"))
+cat("SSP population data saved to:", file.path(future_output_dir, "ssp_population_data.xlsx"), "\n")
+
+#####################################
+## 10.3 Calculate historical baseline incidence rates
+#####################################
+cat("\n--- 10.3 Calculate historical baseline incidence rates ---\n")
+
+# Calculate historical average annual incidence rate for each city
+if (offset_available) {
+  # If population data is available, calculate incidence rate (per thousand)
+  baseline_incidence <- data[, .(
+    ADM3 = first(get(id_col_data)),
+    baseline_annual_rate = mean(Y / population * 1000, na.rm = TRUE),  # Per thousand incidence rate
+    avg_population = mean(population, na.rm = TRUE),
+    total_years = length(unique(year))
+  ), by = cityid]
+} else {
+  # If no population data, use case counts
+  baseline_incidence <- data[, .(
+    ADM3 = first(get(id_col_data)),
+    baseline_annual_cases = mean(Y, na.rm = TRUE) * 52,  # Annualized case count (assuming weekly data)
+    total_years = length(unique(year))
+  ), by = cityid]
+}
+
+cat("Historical baseline incidence calculation completed. First few rows:\n")
+print(head(baseline_incidence))
+
+#####################################
+## 10.4 Calculate future scenario case numbers
+#####################################
+cat("\n--- 10.4 Calculate future scenario case numbers ---\n")
+
+# Merge baseline data and SSP population data
+future_cases_data <- merge(ssp_population_data, baseline_incidence, by.x = "ADM3_PCODE", by.y = "ADM3", all.x = TRUE)
+
+# Merge city-specific SD effect data
+future_cases_data <- merge(future_cases_data, 
+                           city_sd_effect_specific[, .(ADM3, avg_percent_change_city_sd, city_specific_sd_floodday)], 
+                           by.x = "ADM3_PCODE", by.y = "ADM3", all.x = TRUE)
+
+# Calculate IRR (Incidence Rate Ratio)
+future_cases_data[, IRR_SD_city := 1 + avg_percent_change_city_sd / 100]
+
+if (offset_available) {
+  # If baseline incidence rate is available, use incidence rate calculation
+  future_cases_data[, cases_flood_increase := (baseline_annual_rate * IRR_SD_city * population_future) / 1000]
+  future_cases_data[, baseline_cases_future := (baseline_annual_rate * population_future) / 1000]
+} else {
+  # If only baseline case count is available, adjust by population ratio
+  future_cases_data[, cases_flood_increase := baseline_annual_cases * IRR_SD_city * (population_future / 100000)]  # Assume baseline population of 100,000
+  future_cases_data[, baseline_cases_future := baseline_annual_cases * (population_future / 100000)]
+}
+
+# Calculate additional case numbers
+future_cases_data[, additional_cases := cases_flood_increase - baseline_cases_future]
+
+# Handle missing values
+future_cases_data[is.na(additional_cases), additional_cases := 0]
+future_cases_data[is.na(cases_flood_increase), cases_flood_increase := 0]
+
+cat("Future scenario case number calculation completed. First few rows:\n")
+print(head(future_cases_data[, .(ADM3_PCODE, scenario, year, population_future, IRR_SD_city, cases_flood_increase, additional_cases)]))
+
+#####################################
+## 10.5 Save detailed results
+#####################################
+cat("\n--- 10.5 Save detailed results ---\n")
+
+# Save complete future scenario analysis results
+write_xlsx(future_cases_data, file.path(future_output_dir, "future_flood_malaria_cases_detailed.xlsx"))
+
+# Create summary table
+summary_by_scenario <- future_cases_data[, .(
+  total_population = sum(population_future, na.rm = TRUE),
+  total_baseline_cases = sum(baseline_cases_future, na.rm = TRUE),
+  total_flood_increase_cases = sum(cases_flood_increase, na.rm = TRUE),
+  total_additional_cases = sum(additional_cases, na.rm = TRUE),
+  avg_IRR = mean(IRR_SD_city, na.rm = TRUE),
+  regions_count = .N
+), by = .(scenario, year, ssp_type)]
+
+write_xlsx(summary_by_scenario, file.path(future_output_dir, "future_scenario_summary.xlsx"))
+
+cat("Detailed results saved to:\n")
+cat("-", file.path(future_output_dir, "future_flood_malaria_cases_detailed.xlsx"), "\n")
+cat("-", file.path(future_output_dir, "future_scenario_summary.xlsx"), "\n")
+
+#####################################
+## 10.6 Spatial visualization
+#####################################
+cat("\n--- 10.6 Spatial visualization ---\n")
+
+# Create maps for each year and SSP scenario
+if (!use_simulated_data) {
+  tryCatch({
+    years_to_plot <- c(2030, 2050)
+    ssp_types <- c("SSP1", "SSP2", "SSP3")
+    
+    for(year in years_to_plot) {
+      for(ssp in ssp_types) {
+        scenario_name <- paste0(ssp, "_", year)
+        
+        # Filter data
+        plot_data <- future_cases_data[scenario == scenario_name]
+        
+        if(nrow(plot_data) > 0) {
+          # Merge to map data
+          map_with_future_cases <- dplyr::left_join(peru_map, plot_data, by = c("ADM3_PCODE" = "ADM3_PCODE"))
+          
+          # Create map
+          future_map_plot <- ggplot(map_with_future_cases) +
+            geom_sf(aes(fill = additional_cases), color = "grey50", size = 0.1) +
+            scale_fill_viridis_c(option = "plasma", name = "Additional Cases", 
+                                 na.value = "grey80", trans = "sqrt",
+                                 labels = scales::comma) +
+            labs(title = paste0("Predicted Malaria Case Increase from 1SD Flood Intensity Increase"),
+                 subtitle = paste0(scenario_name, " - ", if(offset_available) "Based on Incidence Rate Model" else "Based on Case Count Model"),
+                 caption = "Color represents additional malaria cases due to 1 city-specific SD increase in flood days") +
+            theme_minimal() +
+            theme(
+              legend.position = "bottom",
+              plot.title = element_text(hjust = 0.5, face = "bold"),
+              plot.subtitle = element_text(hjust = 0.5),
+              axis.text = element_blank(),
+              axis.ticks = element_blank()
+            )
+          
+          # Save map
+          map_filename <- paste0("future_malaria_cases_", scenario_name, ".png")
+          ggsave(file.path(future_output_dir, map_filename), future_map_plot, 
+                 width = 10, height = 8, dpi = 300)
+          cat("Map saved:", map_filename, "\n")
+        }
+      }
+    }
+    
+  }, error = function(e) {
+    cat("Error creating maps:", e$message, "\n")
+  })
+}
+
+#####################################
+## 10.7 Create comparison charts
+#####################################
+cat("\n--- 10.7 Create comparison charts ---\n")
+
+# Summarize by SSP type and year
+scenario_comparison <- future_cases_data[, .(
+  total_additional_cases = sum(additional_cases, na.rm = TRUE),
+  avg_population = mean(population_future, na.rm = TRUE),
+  affected_regions = sum(ifelse(additional_cases > 0, 1, 0), na.rm = TRUE)
+), by = .(ssp_type, year)]
+
+# Create bar chart comparing different scenarios
+comparison_plot <- ggplot(scenario_comparison, aes(x = factor(year), y = total_additional_cases, fill = ssp_type)) +
+  geom_col(position = "dodge", alpha = 0.8) +
+  scale_fill_brewer(type = "qual", palette = "Set2", name = "SSP Scenario") +
+  scale_y_continuous(labels = scales::comma) +
+  labs(
+    title = "Predicted Additional Malaria Cases from Flooding Under Different SSP Scenarios",
+    subtitle = "Impact of 1 city-specific standard deviation increase in flood days",
+    x = "Year",
+    y = "Additional Malaria Cases",
+    caption = if(offset_available) "Based on incidence rate model predictions" else "Based on case count model predictions"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5),
+    legend.position = "bottom"
+  )
+
+print(comparison_plot)
+ggsave(file.path(future_output_dir, "ssp_scenario_comparison.png"), comparison_plot, 
+       width = 10, height = 6, dpi = 300)
+
+#####################################
+## 10.8 Final summary
+#####################################
+cat("\n========== Future Flood Risk Scenario Analysis Summary ==========\n")
+cat("Analysis completion time:", Sys.time(), "\n")
+cat("Output directory:", future_output_dir, "\n")
+
+cat("\nMain output files:\n")
+cat("1. ssp_population_data.xlsx - SSP population projection data\n")
+cat("2. future_flood_malaria_cases_detailed.xlsx - Detailed future case predictions\n")
+cat("3. future_scenario_summary.xlsx - Scenario summary statistics\n")
+cat("4. ssp_scenario_comparison.png - SSP scenario comparison chart\n")
+cat("5. future_malaria_cases_[scenario].png - Spatial distribution maps for each scenario\n")
+
+if (nrow(scenario_comparison) > 0) {
+  cat("\nScenario comparison results:\n")
+  print(scenario_comparison)
+  
+  cat("\nKey findings:\n")
+  max_case_scenario <- scenario_comparison[which.max(total_additional_cases)]
+  min_case_scenario <- scenario_comparison[which.min(total_additional_cases)]
+  
+  cat("-Highest risk scenario:", max_case_scenario$ssp_type, max_case_scenario$year, 
+      "year, predicted additional cases:", round(max_case_scenario$total_additional_cases, 0), "\n")
+  cat("-Lowest risk scenario:", min_case_scenario$ssp_type, min_case_scenario$year, 
+      "year, predicted additional cases:", round(min_case_scenario$total_additional_cases, 0), "\n")
+}
+
+cat("\n========== Analysis Complete ==========\n")

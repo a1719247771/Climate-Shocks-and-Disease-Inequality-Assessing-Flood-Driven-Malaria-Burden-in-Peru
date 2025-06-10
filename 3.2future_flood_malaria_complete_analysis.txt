@@ -1,0 +1,392 @@
+#####################################
+## Fixed Complete SSP Scenario Map Visualization Code
+#####################################
+
+cat("\n========== Generate Complete SSP Map Visualization ==========\n")
+
+# Check if necessary data exists (flexible checking)
+analysis_data <- NULL
+data_source_name <- ""
+
+# Check for different possible data object names from the first code
+if (exists("future_cases_data")) {
+  analysis_data <- future_cases_data
+  data_source_name <- "future_cases_data"
+  cat("✓ Found analysis data:", data_source_name, "\n")
+} else if (exists("final_analysis_data")) {
+  analysis_data <- final_analysis_data
+  data_source_name <- "final_analysis_data"
+  cat("✓ Found analysis data:", data_source_name, "\n")
+} else if (exists("ssp_population_data")) {
+  cat("⚠ Found ssp_population_data but missing future_cases_data\n")
+  cat("Please make sure you've run the complete future scenario analysis code\n")
+  stop("Required analysis data not found")
+} else {
+  cat("✗ No analysis data found. Please check that you've run:\n")
+  cat("1. The basic flood impact analysis code (second code)\n") 
+  cat("2. The future scenario prediction code (first code)\n")
+  stop("Required analysis data objects not found")
+}
+
+# Check data structure
+cat("Data object structure:\n")
+cat("- Rows:", nrow(analysis_data), "\n")
+cat("- Columns:", ncol(analysis_data), "\n")
+cat("- Column names preview:", paste(head(names(analysis_data), 10), collapse = ", "), "\n")
+
+# Create output directory (if it doesn't exist)
+output_dir <- "C:/Users/a1230/Desktop/future_flood_malaria_complete_analysis"
+dir.create(output_dir, showWarnings = FALSE)
+cat("Output directory created:", output_dir, "\n")
+
+# Check for available additional cases columns (flexible naming)
+cat("\nChecking for additional cases data...\n")
+
+# Look for different possible column naming patterns
+additional_cases_patterns <- c(
+  "additional_cases",
+  "Additional_Cases_",
+  "cases_flood_increase",
+  "change_in_cases"
+)
+
+available_columns <- names(analysis_data)
+potential_cases_cols <- c()
+
+for (pattern in additional_cases_patterns) {
+  matching_cols <- grep(pattern, available_columns, value = TRUE, ignore.case = TRUE)
+  if (length(matching_cols) > 0) {
+    potential_cases_cols <- c(potential_cases_cols, matching_cols)
+  }
+}
+
+cat("Found potential cases columns:", paste(potential_cases_cols, collapse = ", "), "\n")
+
+# If no pre-calculated additional cases columns, we'll create them from the available data
+if (length(potential_cases_cols) == 0) {
+  cat("No pre-calculated additional cases columns found.\n")
+  cat("Will use available columns to create visualization data...\n")
+  
+  # Check if we have the basic required columns
+  required_base_cols <- c("scenario", "additional_cases")
+  if (all(required_base_cols %in% names(analysis_data))) {
+    
+    # Create scenario-specific columns
+    scenarios <- unique(analysis_data$scenario)
+    cat("Available scenarios:", paste(scenarios, collapse = ", "), "\n")
+    
+    # Reshape data to create columns for each scenario
+    library(tidyr)
+    
+    # Create a wide format with additional cases for each scenario
+    analysis_data_wide <- analysis_data %>%
+      select(ADM3_PCODE, scenario, additional_cases) %>%
+      pivot_wider(
+        names_from = scenario,
+        values_from = additional_cases,
+        names_prefix = "Additional_Cases_"
+      )
+    
+    # Update the analysis data to include these new columns
+    analysis_data <- merge(analysis_data, analysis_data_wide, by = "ADM3_PCODE", all.x = TRUE)
+    
+    # Update potential cases columns
+    potential_cases_cols <- grep("Additional_Cases_", names(analysis_data), value = TRUE)
+    cat("Created additional cases columns:", paste(potential_cases_cols, collapse = ", "), "\n")
+  }
+}
+
+# Map data path (updated to English path structure)
+map_data_paths <- c(
+  "D:/Peru/Peru/third_level_administrative_map/per_admbnda_adm3_ign_20200714.shp",
+  "D:/秘鲁/秘鲁/地图三级行政区/per_admbnda_adm3_ign_20200714.shp"
+)
+
+map_data_path <- NULL
+for (path in map_data_paths) {
+  if (file.exists(path)) {
+    map_data_path <- path
+    break
+  }
+}
+
+# Check if map file exists
+if (is.null(map_data_path)) {
+  cat("Warning: Map file not found in expected locations:\n")
+  for (path in map_data_paths) {
+    cat("-", path, "\n")
+  }
+  cat("Please check map file path and update accordingly\n")
+  use_simulated_maps <- TRUE
+} else {
+  cat("✓ Map file found:", map_data_path, "\n")
+  use_simulated_maps <- FALSE
+}
+
+# Define map scenarios to generate
+map_scenarios <- list(
+  list(name = "SSP1_2030", color = "plasma", title = "2030 SSP1 Scenario"),
+  list(name = "SSP1_2050", color = "plasma", title = "2050 SSP1 Scenario"),
+  list(name = "SSP2_2030", color = "inferno", title = "2030 SSP2 Scenario"),
+  list(name = "SSP2_2050", color = "inferno", title = "2050 SSP2 Scenario"),
+  list(name = "SSP3_2030", color = "viridis", title = "2030 SSP3 Scenario"),
+  list(name = "SSP3_2050", color = "viridis", title = "2050 SSP3 Scenario")
+)
+
+# Generate map for each scenario
+if (!use_simulated_maps) {
+  
+  for (scenario_info in map_scenarios) {
+    scenario <- scenario_info$name
+    color_option <- scenario_info$color
+    title_text <- scenario_info$title
+    
+    # Look for data column (flexible naming)
+    possible_col_names <- c(
+      paste0("Additional_Cases_", scenario),
+      paste0("additional_cases_", tolower(scenario)),
+      paste0("cases_", tolower(scenario))
+    )
+    
+    additional_cases_col <- NULL
+    for (col_name in possible_col_names) {
+      if (col_name %in% names(analysis_data)) {
+        additional_cases_col <- col_name
+        break
+      }
+    }
+    
+    cat("\n--- Processing", title_text, "---\n")
+    
+    # If no specific column found, try to filter data by scenario
+    if (is.null(additional_cases_col)) {
+      if ("scenario" %in% names(analysis_data) && "additional_cases" %in% names(analysis_data)) {
+        scenario_data <- analysis_data[analysis_data$scenario == scenario, ]
+        if (nrow(scenario_data) > 0) {
+          # Use the general additional_cases column for this scenario
+          cat("Using filtered data for scenario:", scenario, "\n")
+          analysis_data_subset <- scenario_data
+          additional_cases_col <- "additional_cases"
+        } else {
+          cat("✗ No data found for scenario:", scenario, "\n")
+          next
+        }
+      } else {
+        cat("✗ No suitable data column found for scenario:", scenario, "\n")
+        next
+      }
+    } else {
+      analysis_data_subset <- analysis_data
+    }
+    
+    # Check if there are non-NA data
+    non_na_count <- sum(!is.na(analysis_data_subset[[additional_cases_col]]))
+    cat("Number of non-NA data points:", non_na_count, "\n")
+    
+    if (non_na_count > 0) {
+      
+      tryCatch({
+        # Read map data
+        peru_map <- st_read(map_data_path, quiet = TRUE)
+        peru_map <- peru_map[!st_is_empty(peru_map), ]
+        if(any(!st_is_valid(peru_map))) peru_map <- st_make_valid(peru_map)
+        
+        # Ensure ID column matching (try different possible ID column names)
+        possible_id_cols <- c("ADM3_PCODE", "ADM3_PC", "PCODE")
+        map_id_col_name <- NULL
+        
+        for (id_col in possible_id_cols) {
+          if (id_col %in% names(peru_map)) {
+            map_id_col_name <- id_col
+            break
+          }
+        }
+        
+        if (is.null(map_id_col_name)) {
+          cat("✗ Could not find suitable ID column in map data\n")
+          cat("Available columns:", paste(names(peru_map), collapse = ", "), "\n")
+          next
+        }
+        
+        peru_map[[map_id_col_name]] <- as.character(peru_map[[map_id_col_name]])
+        
+        # Prepare data for mapping
+        data_id_col <- "ADM3_PCODE"
+        if (!"ADM3_PCODE" %in% names(analysis_data_subset)) {
+          # Try other possible ID column names in data
+          possible_data_id_cols <- c("ADM3", "cityid", "ADM3_PC")
+          for (id_col in possible_data_id_cols) {
+            if (id_col %in% names(analysis_data_subset)) {
+              data_id_col <- id_col
+              break
+            }
+          }
+        }
+        
+        map_data_cols <- c(data_id_col, additional_cases_col)
+        
+        # Extract map data
+        map_data_for_viz <- analysis_data_subset[, map_data_cols, with = FALSE]
+        
+        # Merge map data
+        map_with_results <- dplyr::left_join(peru_map, map_data_for_viz, 
+                                             by = setNames(data_id_col, map_id_col_name))
+        
+        # Check merged data
+        matched_count <- sum(!is.na(map_with_results[[additional_cases_col]]))
+        cat("Map data successfully matched:", matched_count, "regions\n")
+        
+        if (matched_count > 0) {
+          
+          # Calculate data range for legend
+          data_range <- range(map_with_results[[additional_cases_col]], na.rm = TRUE)
+          cat("Data range:", round(data_range[1], 2), "to", round(data_range[2], 2), "\n")
+          
+          # Create map
+          map_plot <- ggplot(map_with_results) +
+            geom_sf(aes_string(fill = additional_cases_col), color = "grey50", size = 0.1) +
+            scale_fill_viridis_c(
+              option = color_option, 
+              name = "Additional Cases", 
+              na.value = "grey80", 
+              trans = "sqrt",
+              labels = scales::comma_format(accuracy = 0.1)
+            ) +
+            labs(
+              title = paste0(title_text, ": Additional Malaria Cases Due to Flooding"),
+              subtitle = "Based on flood days increase of 1 standard deviation for each city",
+              caption = "Color intensity represents predicted additional cases (square root transformed for visualization)"
+            ) +
+            theme_minimal() +
+            theme(
+              legend.position = "bottom",
+              legend.key.width = unit(4, "cm"),
+              legend.key.height = unit(0.6, "cm"),
+              plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+              plot.subtitle = element_text(hjust = 0.5, size = 11),
+              plot.caption = element_text(hjust = 0.5, size = 9),
+              axis.text = element_blank(),
+              axis.ticks = element_blank(),
+              panel.grid = element_blank(),
+              panel.background = element_blank()
+            ) +
+            guides(fill = guide_colorbar(
+              title.position = "top",
+              title.hjust = 0.5,
+              barwidth = 25,
+              barheight = 1.2,
+              ticks.colour = "black",
+              frame.colour = "black"
+            ))
+          
+          # Display map
+          print(map_plot)
+          
+          # Save map
+          map_filename <- paste0("future_additional_cases_map_", scenario, ".png")
+          map_filepath <- file.path(output_dir, map_filename)
+          
+          ggsave(map_filepath, map_plot, 
+                 width = 16, height = 12, dpi = 300, bg = "white")
+          
+          cat("✓", title_text, "map saved:", map_filename, "\n")
+          
+        } else {
+          cat("✗", title_text, ": Map data matching failed\n")
+        }
+        
+      }, error = function(e) {
+        cat("✗", title_text, "map generation error:", e$message, "\n")
+        cat("Error details:\n")
+        print(e)
+      })
+      
+    } else {
+      cat("✗", title_text, ": No valid data\n")
+    }
+  }
+} else {
+  cat("⚠ Skipping map generation due to missing map files\n")
+}
+
+# Generate summary visualization if we have scenario data
+cat("\n--- Generate Summary Statistics ---\n")
+
+if ("scenario" %in% names(analysis_data) && "additional_cases" %in% names(analysis_data)) {
+  
+  # Create summary by scenario
+  scenario_summary <- analysis_data[, .(
+    total_additional_cases = sum(additional_cases, na.rm = TRUE),
+    avg_additional_cases = mean(additional_cases, na.rm = TRUE),
+    median_additional_cases = median(additional_cases, na.rm = TRUE),
+    max_additional_cases = max(additional_cases, na.rm = TRUE),
+    regions_with_cases = sum(additional_cases > 0, na.rm = TRUE),
+    total_regions = .N
+  ), by = scenario]
+  
+  cat("Summary by scenario:\n")
+  print(scenario_summary)
+  
+  # Save summary
+  write_xlsx(scenario_summary, file.path(output_dir, "scenario_summary_statistics.xlsx"))
+  
+  # Create comparison bar plot
+  if (nrow(scenario_summary) > 1) {
+    
+    # Extract year and SSP type for better plotting
+    scenario_summary[, year := as.numeric(substr(scenario, nchar(scenario)-3, nchar(scenario)))]
+    scenario_summary[, ssp_type := substr(scenario, 1, 4)]
+    
+    comparison_plot <- ggplot(scenario_summary, aes(x = factor(year), y = total_additional_cases, fill = ssp_type)) +
+      geom_col(position = "dodge", alpha = 0.8) +
+      scale_fill_brewer(type = "qual", palette = "Set2", name = "SSP Scenario") +
+      scale_y_continuous(labels = scales::comma) +
+      labs(
+        title = "Total Additional Malaria Cases by SSP Scenario",
+        subtitle = "Predicted impact of flood day increases",
+        x = "Year",
+        y = "Total Additional Cases",
+        caption = "Based on 1 standard deviation increase in flood days per city"
+      ) +
+      theme_minimal() +
+      theme(
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5),
+        legend.position = "bottom"
+      )
+    
+    print(comparison_plot)
+    
+    # Save comparison plot
+    ggsave(file.path(output_dir, "scenario_comparison_barplot.png"), comparison_plot, 
+           width = 10, height = 6, dpi = 300, bg = "white")
+    
+    cat("✓ Scenario comparison plot saved\n")
+  }
+}
+
+cat("\n========== Map Visualization Generation Complete ==========\n")
+cat("Output directory:", output_dir, "\n")
+
+# List generated files
+cat("\nGenerated files:\n")
+all_files <- list.files(output_dir, full.names = FALSE)
+if (length(all_files) > 0) {
+  for (file in all_files) {
+    cat("- ", file, "\n")
+  }
+} else {
+  cat("No files generated - please check data and paths\n")
+}
+
+# Debug information
+cat("\n=== Debug Information ===\n")
+cat("Data source used:", data_source_name, "\n")
+cat("Analysis data dimensions:", nrow(analysis_data), "x", ncol(analysis_data), "\n")
+cat("Key columns available:", paste(head(names(analysis_data), 15), collapse = ", "), "\n")
+
+if ("scenario" %in% names(analysis_data)) {
+  cat("Available scenarios:", paste(unique(analysis_data$scenario), collapse = ", "), "\n")
+}
+
+cat("=== End Debug Information ===\n")
